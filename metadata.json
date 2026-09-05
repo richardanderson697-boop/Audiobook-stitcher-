@@ -1,0 +1,6 @@
+{
+  "name": "Audiobook Chapter & Stitch Studio",
+  "description": "Upload MP3 files or ZIP archives with progress bars, unpack canonically, customize cover artwork, sequence chapters, and stitch complete audiobooks with embedded ID3 metadata.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
