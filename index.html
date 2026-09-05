@@ -11,6 +11,18 @@
     <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body class="bg-stone-900 text-stone-100 antialiased selection:bg-amber-500 selection:text-stone-950">
+    <script>
+      // Strictly prevent browser / iframe navigation when files are dragged or dropped
+      (function() {
+        function blockDefault(e) {
+          e.preventDefault();
+        }
+        ['dragenter', 'dragover', 'drop'].forEach(function(type) {
+          window.addEventListener(type, blockDefault, { capture: true, passive: false });
+          document.addEventListener(type, blockDefault, { capture: true, passive: false });
+        });
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

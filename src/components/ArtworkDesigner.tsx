@@ -29,6 +29,22 @@ export const ArtworkDesigner: React.FC<ArtworkDesignerProps> = ({
   const [isGeneratingArtwork, setIsGeneratingArtwork] = useState(false);
   const [renderedImageUrl, setRenderedImageUrl] = useState<string | null>(null);
 
+  const onCoverRenderedRef = useRef(onCoverRendered);
+  useEffect(() => {
+    onCoverRenderedRef.current = onCoverRendered;
+  }, [onCoverRendered]);
+
+  const prevUrlRef = useRef<string | null>(null);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (prevUrlRef.current) {
+        URL.revokeObjectURL(prevUrlRef.current);
+      }
+    };
+  }, []);
+
   // Render canvas whenever settings or metadata change
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -218,9 +234,13 @@ export const ArtworkDesigner: React.FC<ArtworkDesignerProps> = ({
       // Convert canvas to blob and notify parent
       canvas.toBlob((blob) => {
         if (blob) {
+          if (prevUrlRef.current) {
+            URL.revokeObjectURL(prevUrlRef.current);
+          }
           const url = URL.createObjectURL(blob);
+          prevUrlRef.current = url;
           setRenderedImageUrl(url);
-          onCoverRendered(blob, url);
+          onCoverRenderedRef.current?.(blob, url);
         }
       }, 'image/jpeg', 0.95);
     };
@@ -234,7 +254,21 @@ export const ArtworkDesigner: React.FC<ArtworkDesignerProps> = ({
     } else {
       drawContent();
     }
-  }, [settings, metadata, onCoverRendered]);
+  }, [
+    settings.imageUrl,
+    settings.themeColor,
+    settings.brightness,
+    settings.contrast,
+    settings.titleOverlay,
+    settings.authorOverlay,
+    settings.badgeText,
+    settings.showBadge,
+    settings.gradientOverlay,
+    settings.fontFamily,
+    metadata.title,
+    metadata.author,
+    metadata.narrator,
+  ]);
 
   useEffect(() => {
     renderCanvas();

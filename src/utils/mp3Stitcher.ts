@@ -432,7 +432,7 @@ export async function stitchMasterAudiobookSafe(
   metadata: AudiobookMetadata,
   artworkData?: { mimeType: string; data: ArrayBuffer | Uint8Array },
   onProgress?: (percent: number, message: string) => void
-): Promise<{ blob: Blob; buffer: Uint8Array; totalDuration: number }> {
+): Promise<{ blob: Blob; totalDuration: number }> {
   if (!chapters || chapters.length === 0) {
     throw new Error('No chapters available to stitch.');
   }
@@ -561,31 +561,18 @@ export async function stitchMasterAudiobookSafe(
   onProgress?.(85, 'Assembling complete seamless master audiobook package...');
 
   // Combine: [ID3v2 Tag Header] + [Master Xing Frame] + [Chapter 1 Audio] + [Chapter 2 Audio] + ... + [Chapter N Audio]
-  const totalFileLength = id3TagBuffer.length + masterXingFrame.length + grandTotalAudioBytes;
-  const masterOutput = new Uint8Array(totalFileLength);
-
-  let writePos = 0;
-
-  // 1. ID3v2 Header with APIC cover artwork, TLEN, CHAP markers, and CTOC
-  masterOutput.set(id3TagBuffer, writePos);
-  writePos += id3TagBuffer.length;
-
-  // 2. Master Xing/Info Frame (ensures all players read full total duration and seek table)
-  masterOutput.set(masterXingFrame, writePos);
-  writePos += masterXingFrame.length;
-
-  // 3. Concatenate all chapter audio streams sequentially
+  // Using Blob chunk list directly eliminates the risk of giant contiguous ArrayBuffer allocation failures
+  const blobParts: BlobPart[] = [id3TagBuffer, masterXingFrame];
   for (const stream of processedStreams) {
-    masterOutput.set(stream.audioBytes, writePos);
-    writePos += stream.audioBytes.length;
+    blobParts.push(stream.audioBytes);
   }
+
+  const blob = new Blob(blobParts, { type: 'audio/mp3' });
 
   onProgress?.(100, 'Master audiobook successfully stitched and packaged!');
 
-  const blob = new Blob([masterOutput], { type: 'audio/mp3' });
   return {
     blob,
-    buffer: masterOutput,
     totalDuration,
   };
 }

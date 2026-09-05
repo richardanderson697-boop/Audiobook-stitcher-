@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Upload, FileAudio, FileArchive, Image as ImageIcon, CheckCircle2, AlertCircle, Loader2, FolderUp } from 'lucide-react';
 import { UploadProgressItem } from '../types';
 import { formatBytes } from '../utils/audioProcessor';
+import { extractFilesFromDataTransfer } from '../utils/fileExtractor';
 
 interface UploadZoneProps {
   onFilesSelected: (files: FileList | File[]) => void;
@@ -18,6 +19,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  const lastDropTimestampRef = useRef<number>(0);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -31,20 +33,56 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     setIsDragOver(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFilesSelected(e.dataTransfer.files);
+    const now = Date.now();
+    if (now - lastDropTimestampRef.current < 500) {
+      return;
+    }
+    lastDropTimestampRef.current = now;
+
+    try {
+      const dt = e.nativeEvent.dataTransfer || e.dataTransfer;
+      const files = await extractFilesFromDataTransfer(dt);
+      if (files.length > 0) {
+        onFilesSelected(files);
+      }
+    } catch (err) {
+      console.error('Error reading dropped files:', err);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        onFilesSelected(Array.from(e.dataTransfer.files));
+      }
     }
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onFilesSelected(e.target.files);
-      e.target.value = ''; // Reset for consecutive uploads
+      const fileArray = Array.from(e.target.files);
+      onFilesSelected(fileArray);
+    }
+  };
+
+  const openAudioPicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  const openZipPicker = () => {
+    if (zipInputRef.current) {
+      zipInputRef.current.value = '';
+      zipInputRef.current.click();
+    }
+  };
+
+  const openFolderPicker = () => {
+    if (folderInputRef.current) {
+      folderInputRef.current.value = '';
+      folderInputRef.current.click();
     }
   };
 
@@ -67,7 +105,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.zip,image/jpeg,image/png,image/webp"
+          accept="audio/*,.mp3,.wav,.m4a,.m4b,.aac,.ogg,.flac,.wma,.opus,.aiff,.zip,image/jpeg,image/png,image/webp"
           onChange={handleFileInputChange}
           className="hidden"
           id="audio-multi-file-input"
@@ -116,7 +154,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <button
               id="select-audio-files-btn"
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={openAudioPicker}
               disabled={isProcessing}
               className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-stone-100 bg-stone-800 hover:bg-stone-700 border border-stone-600 rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50"
             >
@@ -127,7 +165,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <button
               id="select-zip-btn"
               type="button"
-              onClick={() => zipInputRef.current?.click()}
+              onClick={openZipPicker}
               disabled={isProcessing}
               className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-cyan-200 bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/60 rounded-xl transition-all active:scale-95 disabled:opacity-50"
             >
@@ -138,7 +176,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <button
               id="select-folder-btn"
               type="button"
-              onClick={() => folderInputRef.current?.click()}
+              onClick={openFolderPicker}
               disabled={isProcessing}
               className="inline-flex items-center gap-2 px-3 py-2 text-xs sm:text-sm font-medium text-stone-400 hover:text-stone-200 bg-stone-900/80 hover:bg-stone-800 border border-stone-700 rounded-xl transition-all active:scale-95 disabled:opacity-50"
               title="Upload entire audiobook folder"
@@ -149,10 +187,10 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           </div>
 
           {/* Supported Format Badges */}
-          <div className="flex items-center gap-2 mt-5 text-[11px] text-stone-500 font-mono">
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-5 text-[11px] text-stone-500 font-mono">
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.MP3</span>
+            <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.M4B / .M4A</span>
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.WAV</span>
-            <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.M4A / .AAC</span>
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.ZIP Archive</span>
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">JPG / PNG Artwork</span>
           </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { UploadZone } from './components/UploadZone';
 import { ArtworkDesigner } from './components/ArtworkDesigner';
@@ -17,6 +17,7 @@ import {
   formatTime,
 } from './utils/audioProcessor';
 import { canonicallyUnzipAudiobook } from './utils/zipHandler';
+import { extractFilesFromDataTransfer } from './utils/fileExtractor';
 import {
   FileAudio,
   FileArchive,
@@ -75,23 +76,43 @@ export default function App() {
   const [currentPlayingChapter, setCurrentPlayingChapter] = useState<AudioChapter | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // Global window drag detection
+  const [isWindowDragging, setIsWindowDragging] = useState(false);
+
   // Modals
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isCueOpen, setIsCueOpen] = useState(false);
   const [pendingInsertTargetIndex, setPendingInsertTargetIndex] = useState<number | null>(null);
+  const lastDropTimestampRef = useRef<number>(0);
+
+  // Stabilized callbacks for child components to avoid re-render loops
+  const handleCoverRendered = useCallback((blob: Blob, url: string) => {
+    setRenderedCoverBlob(blob);
+    setRenderedCoverUrl(url);
+  }, []);
+
+  const handleUpdateArtworkSettings = useCallback((updates: Partial<ArtworkSettings>) => {
+    setArtworkSettings((prev) => ({ ...prev, ...updates }));
+  }, []);
+
+  const handleMetadataChange = useCallback((updates: Partial<AudiobookMetadata>) => {
+    setMetadata((prev) => ({ ...prev, ...updates }));
+  }, []);
 
   // Synchronize start & end offsets whenever chapters reorder or mutate
   const updateChapterOffsets = useCallback((chapterList: AudioChapter[]) => {
     let currentOffset = 0;
     return chapterList.map((ch, idx) => {
+      const dur = Number.isFinite(ch.duration) && ch.duration > 0 ? ch.duration : 0;
       const startOffset = currentOffset;
-      const endOffset = startOffset + ch.duration;
-      const mins = Math.floor(ch.duration / 60);
-      const secs = Math.floor(ch.duration % 60);
+      const endOffset = startOffset + dur;
+      const mins = Math.floor(dur / 60);
+      const secs = Math.floor(dur % 60);
       const formattedDuration = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
       currentOffset = endOffset;
       return {
         ...ch,
+        duration: dur,
         trackNumber: idx + 1,
         startOffset,
         endOffset,
@@ -101,7 +122,7 @@ export default function App() {
   }, []);
 
   // Handle uploaded files (MP3s, ZIPs, Photos, Folders)
-  const handleFilesSelected = async (fileList: FileList | File[]) => {
+  const handleFilesSelected = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
@@ -146,11 +167,24 @@ export default function App() {
         // 1. Is it a ZIP Archive?
         if (lowerName.endsWith('.zip')) {
           updateProg('unzipping', 20, 'Canonically unzipping archive...');
-          const unzipResult = await canonicallyUnzipAudiobook(file, (pct, stageMsg) => {
-            updateProg('unzipping', pct, stageMsg);
-          });
-
-          newChaptersToAdd.push(...unzipResult.chapters);
+          const unzipResult = await canonicallyUnzipAudiobook(
+            file,
+            (pct, stageMsg) => {
+              updateProg('unzipping', pct, stageMsg);
+            },
+            (extractedChapter) => {
+              setChapters((prev) => {
+                if (pendingInsertTargetIndex !== null && pendingInsertTargetIndex >= 0) {
+                  const copy = [...prev];
+                  const insertIdx = Math.min(copy.length, pendingInsertTargetIndex);
+                  copy.splice(insertIdx, 0, extractedChapter);
+                  return updateChapterOffsets(copy);
+                } else {
+                  return updateChapterOffsets([...prev, extractedChapter]);
+                }
+              });
+            }
+          );
 
           // If zip contained cover art, apply it!
           if (unzipResult.coverImageBlob && unzipResult.coverImageUrl) {
@@ -188,45 +222,65 @@ export default function App() {
         // 3. Is it an MP3 / Audio file?
         else if (
           file.type.startsWith('audio/') ||
+          file.type === 'video/mp4' ||
           lowerName.endsWith('.mp3') ||
-          lowerName.endsWith('.wav') ||
           lowerName.endsWith('.m4a') ||
+          lowerName.endsWith('.m4b') ||
+          lowerName.endsWith('.wav') ||
           lowerName.endsWith('.aac') ||
           lowerName.endsWith('.ogg') ||
-          lowerName.endsWith('.flac')
+          lowerName.endsWith('.flac') ||
+          lowerName.endsWith('.wma') ||
+          lowerName.endsWith('.opus') ||
+          lowerName.endsWith('.aiff') ||
+          lowerName.endsWith('.aif') ||
+          lowerName.endsWith('.mp4')
         ) {
-          updateProg('processing', 40, 'Decoding audio metadata & waveform peaks...');
-          const arrayBuffer = await file.arrayBuffer();
-          const decoded = await decodeAudioDetails(arrayBuffer, file.name);
+          updateProg('processing', 50, 'Inspecting audio duration & track info...');
+          // Pure byte-level demuxer without full PCM decoding or DOM media instantiation
+          const decoded = await decodeAudioDetails(file, file.name);
 
           const title = cleanChapterTitle(file.name);
-          const duration = decoded.duration;
+          const duration = Number.isFinite(decoded.duration) && decoded.duration > 0 ? decoded.duration : 0;
           const mins = Math.floor(duration / 60);
           const secs = Math.floor(duration % 60);
           const formattedDuration = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
-          newChaptersToAdd.push({
+          const chapterObj: AudioChapter = {
             id: `ch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
             title,
             originalFileName: file.name,
             file,
-            arrayBuffer,
             blob: file,
             duration,
             formattedDuration,
             size: file.size,
-            trackNumber: chapters.length + newChaptersToAdd.length + 1,
+            trackNumber: 1, // Will be computed accurately by updateChapterOffsets
             startOffset: 0,
             endOffset: duration,
             sampleRate: decoded.sampleRate,
             waveformPeaks: decoded.waveformPeaks,
             status: 'ready',
-          });
+          };
 
+          // Progressively append each chapter directly into state so each track appears on screen immediately
+          setChapters((prev) => {
+            if (pendingInsertTargetIndex !== null && pendingInsertTargetIndex >= 0) {
+              const copy = [...prev];
+              const insertIdx = Math.min(copy.length, pendingInsertTargetIndex + i);
+              copy.splice(insertIdx, 0, chapterObj);
+              return updateChapterOffsets(copy);
+            } else {
+              return updateChapterOffsets([...prev, chapterObj]);
+            }
+          });
           updateProg('done', 100, `Ready: ${formattedDuration}`);
         } else {
           updateProg('error', 100, 'Unsupported file format', 'Only MP3/audio, ZIP, and images supported');
         }
+
+        // Micro-yield to event loop so progress updates smoothly on screen
+        await new Promise((r) => setTimeout(r, 16));
       } catch (err) {
         console.error(err);
         updateProg(
@@ -238,24 +292,75 @@ export default function App() {
       }
     }
 
-    if (newChaptersToAdd.length > 0) {
-      setChapters((prev) => {
-        let combined: AudioChapter[];
-        if (pendingInsertTargetIndex !== null && pendingInsertTargetIndex >= 0) {
-          const copy = [...prev];
-          const insertIdx = Math.min(copy.length, pendingInsertTargetIndex);
-          copy.splice(insertIdx, 0, ...newChaptersToAdd);
-          combined = copy;
-        } else {
-          combined = [...prev, ...newChaptersToAdd];
-        }
-        return updateChapterOffsets(combined);
-      });
-      setPendingInsertTargetIndex(null);
-    }
-
+    setPendingInsertTargetIndex(null);
     setIsProcessingUpload(false);
-  };
+  }, [pendingInsertTargetIndex, updateChapterOffsets]);
+
+  // Prevent default window navigation when dragging files onto any part of the screen
+  useEffect(() => {
+    let dragCounter = 0;
+
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter++;
+      if (e.dataTransfer?.types?.includes('Files')) {
+        setIsWindowDragging(true);
+      }
+    };
+
+    const handleWindowDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        setIsWindowDragging(false);
+      }
+    };
+
+    const handleWindowDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter = 0;
+      setIsWindowDragging(false);
+
+      const now = Date.now();
+      if (now - lastDropTimestampRef.current < 500) {
+        return;
+      }
+      lastDropTimestampRef.current = now;
+
+      try {
+        const files = await extractFilesFromDataTransfer(e.dataTransfer);
+        if (files.length > 0) {
+          handleFilesSelected(files);
+        }
+      } catch (err) {
+        console.error('Window drop extraction error:', err);
+        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+          handleFilesSelected(Array.from(e.dataTransfer.files));
+        }
+      }
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver, { capture: true });
+    window.addEventListener('dragenter', handleWindowDragEnter, { capture: true });
+    window.addEventListener('dragleave', handleWindowDragLeave, { capture: true });
+    window.addEventListener('drop', handleWindowDrop, { capture: true });
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver, { capture: true });
+      window.removeEventListener('dragenter', handleWindowDragEnter, { capture: true });
+      window.removeEventListener('dragleave', handleWindowDragLeave, { capture: true });
+      window.removeEventListener('drop', handleWindowDrop, { capture: true });
+    };
+  }, [handleFilesSelected]);
 
   // One-click demo loader for immediate testing
   const handleLoadSample = async () => {
@@ -393,13 +498,8 @@ export default function App() {
               <div className="lg:col-span-6">
                 <ArtworkDesigner
                   settings={artworkSettings}
-                  onUpdateSettings={(updates) =>
-                    setArtworkSettings((prev) => ({ ...prev, ...updates }))
-                  }
-                  onCoverRendered={(blob, url) => {
-                    setRenderedCoverBlob(blob);
-                    setRenderedCoverUrl(url);
-                  }}
+                  onUpdateSettings={handleUpdateArtworkSettings}
+                  onCoverRendered={handleCoverRendered}
                   metadata={metadata}
                 />
               </div>
@@ -408,7 +508,7 @@ export default function App() {
               <div className="lg:col-span-6">
                 <MetadataEditor
                   metadata={metadata}
-                  onChange={(updates) => setMetadata((prev) => ({ ...prev, ...updates }))}
+                  onChange={handleMetadataChange}
                   onAutoSuggest={handleAutoSuggestMetadata}
                 />
               </div>
@@ -535,6 +635,21 @@ export default function App() {
         chapters={chapters}
         metadata={metadata}
       />
+
+      {/* Full-Screen Window Drag & Drop Overlay */}
+      {isWindowDragging && (
+        <div className="fixed inset-0 z-50 pointer-events-none bg-stone-950/85 backdrop-blur-sm border-4 border-dashed border-amber-500/80 flex items-center justify-center m-4 rounded-3xl animate-fade-in shadow-2xl">
+          <div className="bg-stone-900/95 border border-amber-500/50 p-8 rounded-2xl shadow-2xl flex flex-col items-center text-center space-y-3 max-w-md pointer-events-none">
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center animate-pulse">
+              <FileAudio className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-stone-100">Drop Audio Files or ZIP Here</h3>
+            <p className="text-sm text-stone-300">
+              Release anywhere to add chapter tracks to your audiobook in instant sequence.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

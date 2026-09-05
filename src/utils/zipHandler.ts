@@ -17,7 +17,8 @@ export interface UnzipResult {
  */
 export async function canonicallyUnzipAudiobook(
   zipFile: File | Blob,
-  onProgress?: (percent: number, stage: string) => void
+  onProgress?: (percent: number, stage: string) => void,
+  onChapterExtracted?: (chapter: AudioChapter) => void
 ): Promise<UnzipResult> {
   onProgress?.(10, 'Reading archive directory structure...');
   const zip = new JSZip();
@@ -41,7 +42,7 @@ export async function canonicallyUnzipAudiobook(
     detectedTitle = zipFile.name.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ');
   }
 
-  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac'];
+  const audioExtensions = ['.mp3', '.wav', '.m4a', '.m4b', '.aac', '.ogg', '.flac', '.wma', '.mp4', '.aiff', '.aif', '.opus'];
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
 
   const audioEntries: { name: string; entry: JSZip.JSZipObject }[] = [];
@@ -81,52 +82,35 @@ export async function canonicallyUnzipAudiobook(
     coverImageUrl = URL.createObjectURL(imgData);
   }
 
-  // Extract audio files
-  const rawChapters: Array<{
-    fileName: string;
-    buffer: ArrayBuffer;
-    size: number;
-  }> = [];
+  // Sort audio entries canonically by filename before unpacking
+  audioEntries.sort((a, b) => {
+    const nameA = a.name.split('/').pop() || a.name;
+    const nameB = b.name.split('/').pop() || b.name;
+    return compareChapterFileNames(nameA, nameB);
+  });
+
+  // Extract and process audio files sequentially using lightweight Blobs
+  const chapters: AudioChapter[] = [];
+  let currentStartOffset = 0;
 
   for (let i = 0; i < audioEntries.length; i++) {
     const item = audioEntries[i];
     const baseName = item.name.split('/').pop() || item.name;
-    const progress = 35 + Math.round(((i + 1) / audioEntries.length) * 35);
-    onProgress?.(progress, `Unpacking ${baseName} (${i + 1}/${audioEntries.length})...`);
+    const progress = 35 + Math.round(((i + 1) / audioEntries.length) * 60);
+    onProgress?.(progress, `Unpacking & inspecting track ${i + 1}/${audioEntries.length}: ${baseName}...`);
 
-    const buffer = await item.entry.async('arraybuffer');
-    rawChapters.push({
-      fileName: baseName,
-      buffer,
-      size: buffer.byteLength,
-    });
-  }
-
-  onProgress?.(70, 'Analyzing audio waveform and chapter durations...');
-
-  // Sort canonically using natural chapter order
-  rawChapters.sort((a, b) => compareChapterFileNames(a.fileName, b.fileName));
-
-  // Decode audio details for each file
-  const chapters: AudioChapter[] = [];
-  let currentStartOffset = 0;
-
-  for (let i = 0; i < rawChapters.length; i++) {
-    const rc = rawChapters[i];
-    const progress = 70 + Math.round(((i + 1) / rawChapters.length) * 25);
-    onProgress?.(progress, `Decoding chapter ${i + 1}: ${rc.fileName}...`);
-
+    const blob = await item.entry.async('blob');
     let duration = 0;
     let sampleRate = 44100;
     let waveformPeaks: number[] = [];
 
     try {
-      const decoded = await decodeAudioDetails(rc.buffer, rc.fileName);
+      const decoded = await decodeAudioDetails(blob, baseName);
       duration = decoded.duration;
       sampleRate = decoded.sampleRate;
       waveformPeaks = decoded.waveformPeaks;
     } catch {
-      duration = Math.max(5, (rc.size * 8) / (128 * 1000));
+      duration = Math.max(5, (blob.size * 8) / (128 * 1000));
       waveformPeaks = Array.from({ length: 64 }, () => Math.random() * 0.6 + 0.2);
     }
 
@@ -134,27 +118,39 @@ export async function canonicallyUnzipAudiobook(
     const mins = Math.floor(duration / 60);
     const secs = Math.floor(duration % 60);
     const formattedDuration = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const title = cleanChapterTitle(baseName);
 
-    const title = cleanChapterTitle(rc.fileName);
-
-    chapters.push({
+    const chapterObj: AudioChapter = {
       id: `ch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`,
       title: title || `Chapter ${i + 1}`,
-      originalFileName: rc.fileName,
-      arrayBuffer: rc.buffer,
-      blob: new Blob([rc.buffer], { type: 'audio/mp3' }),
+      originalFileName: baseName,
+      blob,
       duration,
       formattedDuration,
-      size: rc.size,
+      size: blob.size,
       trackNumber: i + 1,
       startOffset: currentStartOffset,
       endOffset,
       sampleRate,
       waveformPeaks,
       status: 'ready',
-    });
+    };
+
+    chapters.push(chapterObj);
+    onChapterExtracted?.(chapterObj);
+
+    // Free JSZip internal decompressor buffer to prevent OOM
+    try {
+      if ((item.entry as any)._data) {
+        (item.entry as any)._data = null;
+      }
+    } catch {
+      // ignore
+    }
 
     currentStartOffset = endOffset;
+    // Micro-yield to allow browser rendering and garbage collection
+    await new Promise((r) => setTimeout(r, 16));
   }
 
   onProgress?.(100, 'Unpack and canonical sequence complete!');
