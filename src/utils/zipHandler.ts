@@ -139,8 +139,9 @@ export async function canonicallyUnzipAudiobook(
     chapters.push(chapterObj);
     onChapterExtracted?.(chapterObj);
 
-    // Free JSZip internal decompressor buffer to prevent OOM
+    // Free JSZip internal decompressor buffer and entry reference to prevent OOM
     try {
+      loadedZip.remove(item.name);
       if ((item.entry as any)._data) {
         (item.entry as any)._data = null;
       }

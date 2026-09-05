@@ -194,6 +194,12 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">.ZIP Archive</span>
             <span className="px-2 py-0.5 bg-stone-800/80 rounded border border-stone-700">JPG / PNG Artwork</span>
           </div>
+
+          {typeof window !== 'undefined' && window.self !== window.top && (
+            <p className="mt-3 text-[11px] text-stone-400">
+              💡 Tip: Click <strong className="text-amber-300">Select MP3 / Audio Files</strong> or <strong className="text-cyan-300">Upload .ZIP Archive</strong> for instant file dialog, or use <strong className="text-amber-300">Open in New Tab</strong> above for native full-window drag & drop.
+            </p>
+          )}
         </div>
       </div>
 

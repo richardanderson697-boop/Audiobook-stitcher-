@@ -326,12 +326,22 @@ export default function App() {
 
     const handleWindowDrop = async (e: DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       dragCounter = 0;
       setIsWindowDragging(false);
 
+      const hasFiles =
+        (e.dataTransfer?.files && e.dataTransfer.files.length > 0) ||
+        (e.dataTransfer?.types && Array.from(e.dataTransfer.types).some((t) => t.toLowerCase() === 'files'));
+
+      if (!hasFiles) {
+        // Internal DOM drag/drop (e.g. reordering chapters) — allow to proceed to child handlers
+        return;
+      }
+
+      e.stopPropagation();
+
       const now = Date.now();
-      if (now - lastDropTimestampRef.current < 500) {
+      if (now - lastDropTimestampRef.current < 400) {
         return;
       }
       lastDropTimestampRef.current = now;

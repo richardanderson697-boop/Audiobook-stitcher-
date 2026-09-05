@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Sparkles, Trash2, Download, Disc3, Clock, Layers, FileArchive } from 'lucide-react';
+import { BookOpen, Sparkles, Trash2, Download, Disc3, Clock, Layers, FileArchive, ExternalLink } from 'lucide-react';
 import { AudioChapter, AudiobookMetadata } from '../types';
 import { formatTime, formatBytes } from '../utils/audioProcessor';
 
@@ -24,6 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const totalDuration = chapters.reduce((sum, ch) => sum + (ch.duration || 0), 0);
   const totalSize = chapters.reduce((sum, ch) => sum + (ch.size || 0), 0);
+  const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
 
   return (
     <header className="bg-stone-900 border-b border-stone-800 sticky top-0 z-30 shadow-lg">
@@ -50,6 +51,20 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Quick Stats & Action Buttons */}
         <div className="flex items-center flex-wrap gap-2.5">
+          {isInIframe && (
+            <a
+              id="open-full-tab-link"
+              href={typeof window !== 'undefined' ? window.location.href : '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-300 bg-amber-950/40 hover:bg-amber-900/50 border border-amber-600/40 hover:border-amber-500 rounded-lg transition-colors shadow-sm"
+              title="Open in dedicated browser tab for full native memory & drag-and-drop support"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
+              <span>Open in New Tab</span>
+            </a>
+          )}
+
           {chapters.length > 0 && (
             <div className="hidden md:flex items-center gap-3 bg-stone-950/60 border border-stone-800 rounded-lg px-3 py-1.5 text-xs text-stone-300">
               <span className="flex items-center gap-1 text-amber-400 font-medium">
